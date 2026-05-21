@@ -1,7 +1,10 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+
 import { supabase } from '../services/supabase'
 
-const AuthContext = createContext()
+const AuthContext = createContext(null)
+
+const STORAGE_KEY = 'erp_usuario'
 
 export function AuthProvider({ children }) {
   const [usuario, setUsuario] = useState(null)
@@ -12,23 +15,63 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function verificarSessao() {
-    const usuarioSalvo = localStorage.getItem('erp_usuario')
+    try {
+      const usuarioSalvo = localStorage.getItem(STORAGE_KEY)
 
-    if (usuarioSalvo) {
-      setUsuario(JSON.parse(usuarioSalvo))
+      if (!usuarioSalvo) {
+        setUsuario(null)
+        return
+      }
+
+      const usuarioParseado = JSON.parse(usuarioSalvo)
+
+      if (!usuarioParseado?.id) {
+        localStorage.removeItem(STORAGE_KEY)
+        setUsuario(null)
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('id, nome, email, cargo, ativo, criado_em')
+        .eq('id', usuarioParseado.id)
+        .eq('ativo', true)
+        .maybeSingle()
+
+      if (error || !data) {
+        localStorage.removeItem(STORAGE_KEY)
+        setUsuario(null)
+        return
+      }
+
+      setUsuario(data)
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    } catch (error) {
+      console.error(error)
+      localStorage.removeItem(STORAGE_KEY)
+      setUsuario(null)
+    } finally {
+      setCarregando(false)
     }
-
-    setCarregando(false)
   }
 
   async function login(email, senha) {
+    const emailTratado = String(email || '').trim().toLowerCase()
+
+    if (!emailTratado || !senha) {
+      return {
+        sucesso: false,
+        mensagem: 'Informe e-mail e senha.'
+      }
+    }
+
     const { data, error } = await supabase
       .from('usuarios')
-      .select('*')
-      .eq('email', email)
+      .select('id, nome, email, cargo, ativo, criado_em')
+      .eq('email', emailTratado)
       .eq('senha', senha)
       .eq('ativo', true)
-      .single()
+      .maybeSingle()
 
     if (error || !data) {
       return {
@@ -37,37 +80,53 @@ export function AuthProvider({ children }) {
       }
     }
 
-    localStorage.setItem(
-      'erp_usuario',
-      JSON.stringify(data)
-    )
-
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
     setUsuario(data)
 
     return {
-      sucesso: true
+      sucesso: true,
+      usuario: data
     }
   }
 
   function logout() {
-    localStorage.removeItem('erp_usuario')
+    localStorage.removeItem(STORAGE_KEY)
     setUsuario(null)
   }
 
+  function temPermissao(permissoes = []) {
+    if (!usuario) return false
+
+    if (!permissoes.length) return true
+
+    return permissoes.includes(usuario.cargo)
+  }
+
+  const value = useMemo(() => {
+    return {
+      usuario,
+      carregando,
+      login,
+      logout,
+      verificarSessao,
+      temPermissao,
+      autenticado: Boolean(usuario)
+    }
+  }, [usuario, carregando])
+
   return (
-    <AuthContext.Provider
-      value={{
-        usuario,
-        carregando,
-        login,
-        logout
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   )
 }
 
 export function useAuth() {
-  return useContext(AuthContext)
+  const contexto = useContext(AuthContext)
+
+  if (!contexto) {
+    throw new Error('useAuth deve ser usado dentro de AuthProvider.')
+  }
+
+  return contexto
 }

@@ -1,371 +1,300 @@
-import { useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
-import {
-  LayoutDashboard,
-  Package,
-  ShoppingCart,
-  Users,
-  Truck,
-  Clock,
-  BarChart2,
-  FileText,
-  Settings,
-  Menu,
-  X,
-  PackagePlus,
-  History,
-  ShieldCheck,
-  LogOut,
-  BarChart3,
-  Upload,
-  Receipt,
-  Wallet,
-  LineChart,
-  BadgeDollarSign,
-  AlertTriangle,
-  PieChart,
-  Bell,
-  Landmark
-} from 'lucide-react'
+import { AuthProvider, useAuth } from './context/AuthContext'
 
-import { useAuth } from '../context/AuthContext'
+import Layout from './components/Layout'
+import ProtectedRoute from './components/ProtectedRoute'
 
-const menuItems = [
-  {
-    path: '/',
-    icon: LayoutDashboard,
-    label: 'Dashboard',
-    permissoes: ['admin', 'gerente', 'operador', 'estoquista', 'financeiro']
-  },
+import Login from './pages/Login'
+import Dashboard from './pages/Dashboard'
+import Caixa from './pages/Caixa'
+import Produtos from './pages/Produtos'
+import MovimentacoesEstoque from './pages/MovimentacoesEstoque'
+import EstoqueMinimo from './pages/EstoqueMinimo'
+import CurvaABC from './pages/CurvaABC'
+import Compras from './pages/Compras'
+import ImportacaoNfe from './pages/ImportacaoNfe'
+import Vendas from './pages/Vendas'
+import Clientes from './pages/Clientes'
+import Fornecedores from './pages/Fornecedores'
+import Fiado from './pages/Fiado'
+import Financeiro from './pages/Financeiro'
+import FluxoCaixa from './pages/FluxoCaixa'
+import ContasPagar from './pages/ContasPagar'
+import ContasReceber from './pages/ContasReceber'
+import Dre from './pages/Dre'
+import Relatorios from './pages/Relatorios'
+import Auditoria from './pages/Auditoria'
+import Usuarios from './pages/Usuarios'
+import Nfe from './pages/Nfe'
+import Configuracoes from './pages/Configuracoes'
+import Notificacoes from './pages/Notificacoes'
 
-  {
-    path: '/notificacoes',
-    icon: Bell,
-    label: 'Notificações',
-    permissoes: ['admin', 'gerente', 'financeiro', 'estoquista']
-  },
+const permissoes = {
+  todos: ['admin', 'gerente', 'operador', 'estoquista', 'financeiro'],
+  caixa: ['admin', 'gerente', 'financeiro', 'operador'],
+  estoque: ['admin', 'gerente', 'operador', 'estoquista'],
+  estoqueRestrito: ['admin', 'gerente', 'estoquista'],
+  compras: ['admin', 'gerente', 'estoquista'],
+  vendas: ['admin', 'gerente', 'operador', 'financeiro'],
+  clientes: ['admin', 'gerente', 'operador', 'financeiro'],
+  fornecedores: ['admin', 'gerente', 'estoquista'],
+  financeiro: ['admin', 'gerente', 'financeiro'],
+  auditoria: ['admin', 'gerente'],
+  admin: ['admin']
+}
 
-  {
-    path: '/caixa',
-    icon: Landmark,
-    label: 'Caixa',
-    permissoes: ['admin', 'gerente', 'financeiro', 'operador']
-  },
-
-  {
-    path: '/produtos',
-    icon: Package,
-    label: 'Estoque',
-    permissoes: ['admin', 'gerente', 'operador', 'estoquista']
-  },
-
-  {
-    path: '/estoque-minimo',
-    icon: AlertTriangle,
-    label: 'Estoque Mínimo',
-    permissoes: ['admin', 'gerente', 'estoquista']
-  },
-
-  {
-    path: '/curva-abc',
-    icon: PieChart,
-    label: 'Curva ABC',
-    permissoes: ['admin', 'gerente', 'estoquista']
-  },
-
-  {
-    path: '/compras',
-    icon: PackagePlus,
-    label: 'Compras / Entrada',
-    permissoes: ['admin', 'gerente', 'estoquista']
-  },
-
-  {
-    path: '/importar-nfe',
-    icon: Upload,
-    label: 'Importar NF-e',
-    permissoes: ['admin', 'gerente', 'estoquista', 'financeiro']
-  },
-
-  {
-    path: '/vendas',
-    icon: ShoppingCart,
-    label: 'Vendas / PDV',
-    permissoes: ['admin', 'gerente', 'operador', 'financeiro']
-  },
-
-  {
-    path: '/clientes',
-    icon: Users,
-    label: 'Clientes',
-    permissoes: ['admin', 'gerente', 'operador', 'financeiro']
-  },
-
-  {
-    path: '/fornecedores',
-    icon: Truck,
-    label: 'Fornecedores',
-    permissoes: ['admin', 'gerente', 'estoquista']
-  },
-
-  {
-    path: '/fiado',
-    icon: Clock,
-    label: 'Fiado',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/financeiro',
-    icon: BarChart2,
-    label: 'Financeiro',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/fluxo-caixa',
-    icon: LineChart,
-    label: 'Fluxo de Caixa',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/contas-pagar',
-    icon: Receipt,
-    label: 'Contas a Pagar',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/contas-receber',
-    icon: Wallet,
-    label: 'Contas a Receber',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/dre',
-    icon: BadgeDollarSign,
-    label: 'DRE',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/relatorios',
-    icon: BarChart3,
-    label: 'Relatórios',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/auditoria',
-    icon: History,
-    label: 'Histórico',
-    permissoes: ['admin', 'gerente']
-  },
-
-  {
-    path: '/usuarios',
-    icon: ShieldCheck,
-    label: 'Usuários',
-    permissoes: ['admin']
-  },
-
-  {
-    path: '/nfe',
-    icon: FileText,
-    label: 'Nota Fiscal',
-    permissoes: ['admin', 'gerente', 'financeiro']
-  },
-
-  {
-    path: '/configuracoes',
-    icon: Settings,
-    label: 'Configurações',
-    permissoes: ['admin']
-  }
-]
-
-export default function Layout({ children }) {
-  const [sidebarAberta, setSidebarAberta] = useState(true)
-
-  const location = useLocation()
-
-  const { usuario, logout } = useAuth()
-
-  const cargoUsuario = usuario?.cargo || 'operador'
-
-  const menuVisivel = menuItems.filter((item) =>
-    item.permissoes.includes(cargoUsuario)
-  )
-
-  function sair() {
-    logout()
-    window.location.href = '/login'
-  }
-
-  function cargoLabel(cargo) {
-    if (cargo === 'admin') return 'Administrador'
-    if (cargo === 'gerente') return 'Gerente'
-    if (cargo === 'operador') return 'Operador'
-    if (cargo === 'estoquista') return 'Estoquista'
-    if (cargo === 'financeiro') return 'Financeiro'
-
-    return cargo
-  }
-
+function RotaPrivada({ children, permissoes: permissoesDaRota }) {
   return (
-    <div className="flex h-screen bg-gray-100 font-sans">
+    <ProtectedRoute permissoes={permissoesDaRota}>
+      <Layout>
+        {children}
+      </Layout>
+    </ProtectedRoute>
+  )
+}
 
-      <aside
-        className={`
-          ${sidebarAberta ? 'w-56' : 'w-16'}
-          bg-gray-900
-          text-white
-          flex
-          flex-col
-          transition-all
-          duration-200
-          flex-shrink-0
-        `}
-      >
+function LoginRedirect() {
+  const { usuario, carregando } = useAuth()
 
-        <div className="flex items-center justify-between px-4 py-4 border-b border-gray-700">
+  if (carregando) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 text-gray-500">
+        Carregando...
+      </div>
+    )
+  }
 
-          {sidebarAberta && (
-            <div>
+  if (usuario) {
+    return <Navigate to="/" replace />
+  }
 
-              <div className="text-base font-semibold text-white">
-                Mik Distribuidora
-              </div>
+  return <Login />
+}
 
-              <div className="text-xs text-gray-400">
-                Gestão ERP
-              </div>
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginRedirect />} />
 
-            </div>
-          )}
+      <Route
+        path="/"
+        element={
+          <RotaPrivada permissoes={permissoes.todos}>
+            <Dashboard />
+          </RotaPrivada>
+        }
+      />
 
-          <button
-            onClick={() => setSidebarAberta(!sidebarAberta)}
-            className="text-gray-400 hover:text-white p-1 rounded"
-          >
-            {sidebarAberta ? <X size={18} /> : <Menu size={18} />}
-          </button>
+      <Route
+        path="/notificacoes"
+        element={
+          <RotaPrivada permissoes={['admin', 'gerente', 'financeiro', 'estoquista']}>
+            <Notificacoes />
+          </RotaPrivada>
+        }
+      />
 
-        </div>
+      <Route
+        path="/caixa"
+        element={
+          <RotaPrivada permissoes={permissoes.caixa}>
+            <Caixa />
+          </RotaPrivada>
+        }
+      />
 
-        <nav className="flex-1 py-4 overflow-y-auto">
+      <Route
+        path="/produtos"
+        element={
+          <RotaPrivada permissoes={permissoes.estoque}>
+            <Produtos />
+          </RotaPrivada>
+        }
+      />
 
-          {menuVisivel.map((item) => {
-            const Icon = item.icon
+      <Route
+        path="/movimentacoes-estoque"
+        element={
+          <RotaPrivada permissoes={permissoes.estoqueRestrito}>
+            <MovimentacoesEstoque />
+          </RotaPrivada>
+        }
+      />
 
-            const ativo = location.pathname === item.path
+      <Route
+        path="/estoque-minimo"
+        element={
+          <RotaPrivada permissoes={permissoes.estoqueRestrito}>
+            <EstoqueMinimo />
+          </RotaPrivada>
+        }
+      />
 
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`
-                  flex
-                  items-center
-                  gap-3
-                  px-4
-                  py-2.5
-                  text-sm
-                  transition-colors
+      <Route
+        path="/curva-abc"
+        element={
+          <RotaPrivada permissoes={permissoes.estoqueRestrito}>
+            <CurvaABC />
+          </RotaPrivada>
+        }
+      />
 
-                  ${
-                    ativo
-                      ? 'bg-green-700 text-white border-l-2 border-green-400'
-                      : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-                  }
-                `}
-              >
+      <Route
+        path="/compras"
+        element={
+          <RotaPrivada permissoes={permissoes.compras}>
+            <Compras />
+          </RotaPrivada>
+        }
+      />
 
-                <Icon
-                  size={18}
-                  className="flex-shrink-0"
-                />
+      <Route
+        path="/importar-nfe"
+        element={
+          <RotaPrivada permissoes={['admin', 'gerente', 'estoquista', 'financeiro']}>
+            <ImportacaoNfe />
+          </RotaPrivada>
+        }
+      />
 
-                {sidebarAberta && (
-                  <span>{item.label}</span>
-                )}
+      <Route
+        path="/vendas"
+        element={
+          <RotaPrivada permissoes={permissoes.vendas}>
+            <Vendas />
+          </RotaPrivada>
+        }
+      />
 
-              </Link>
-            )
-          })}
+      <Route
+        path="/clientes"
+        element={
+          <RotaPrivada permissoes={permissoes.clientes}>
+            <Clientes />
+          </RotaPrivada>
+        }
+      />
 
-        </nav>
+      <Route
+        path="/fornecedores"
+        element={
+          <RotaPrivada permissoes={permissoes.fornecedores}>
+            <Fornecedores />
+          </RotaPrivada>
+        }
+      />
 
-        {sidebarAberta && (
-          <div className="border-t border-gray-800 p-4 space-y-4">
+      <Route
+        path="/fiado"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <Fiado />
+          </RotaPrivada>
+        }
+      />
 
-            <div>
+      <Route
+        path="/financeiro"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <Financeiro />
+          </RotaPrivada>
+        }
+      />
 
-              <div className="text-xs text-gray-500">
-                Usuário logado
-              </div>
+      <Route
+        path="/fluxo-caixa"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <FluxoCaixa />
+          </RotaPrivada>
+        }
+      />
 
-              <div className="text-sm font-medium text-white mt-1">
-                {usuario?.nome}
-              </div>
+      <Route
+        path="/contas-pagar"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <ContasPagar />
+          </RotaPrivada>
+        }
+      />
 
-              <div className="text-xs text-gray-400 mt-1">
-                {cargoLabel(usuario?.cargo)}
-              </div>
+      <Route
+        path="/contas-receber"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <ContasReceber />
+          </RotaPrivada>
+        }
+      />
 
-            </div>
+      <Route
+        path="/dre"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <Dre />
+          </RotaPrivada>
+        }
+      />
 
-            <button
-              onClick={sair}
-              className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white text-sm py-2 rounded-lg transition"
-            >
+      <Route
+        path="/relatorios"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <Relatorios />
+          </RotaPrivada>
+        }
+      />
 
-              <LogOut size={16} />
+      <Route
+        path="/auditoria"
+        element={
+          <RotaPrivada permissoes={permissoes.auditoria}>
+            <Auditoria />
+          </RotaPrivada>
+        }
+      />
 
-              Sair
+      <Route
+        path="/usuarios"
+        element={
+          <RotaPrivada permissoes={permissoes.admin}>
+            <Usuarios />
+          </RotaPrivada>
+        }
+      />
 
-            </button>
+      <Route
+        path="/nfe"
+        element={
+          <RotaPrivada permissoes={permissoes.financeiro}>
+            <Nfe />
+          </RotaPrivada>
+        }
+      />
 
-            <div className="text-xs text-gray-600 text-center">
-              ERP v1.0.0
-            </div>
+      <Route
+        path="/configuracoes"
+        element={
+          <RotaPrivada permissoes={permissoes.admin}>
+            <Configuracoes />
+          </RotaPrivada>
+        }
+      />
 
-          </div>
-        )}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
 
-      </aside>
-
-      <main className="flex-1 overflow-y-auto">
-
-        <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-
-          <div>
-
-            <h1 className="text-lg font-semibold text-gray-800">
-              Sistema ERP
-            </h1>
-
-            <div className="text-xs text-gray-500 mt-1">
-              Mik Distribuidora
-            </div>
-
-          </div>
-
-          <div className="text-sm text-gray-500">
-            {new Date().toLocaleString('pt-BR')}
-          </div>
-
-        </header>
-
-        <div>
-          {children}
-        </div>
-
-      </main>
-
-    </div>
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
   )
 }
