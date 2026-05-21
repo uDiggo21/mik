@@ -1,12 +1,24 @@
 import { useEffect, useState } from 'react'
+
 import { supabase } from '../services/supabase'
-import { Plus, Search, PackagePlus, Trash2 } from 'lucide-react'
+
+import {
+  Plus,
+  Search,
+  PackagePlus,
+  Trash2,
+  Edit,
+  XCircle,
+  RefreshCcw
+} from 'lucide-react'
+
 import { registrarAuditoria } from '../utils/auditoria'
 
 export default function Compras() {
   const [compras, setCompras] = useState([])
   const [fornecedores, setFornecedores] = useState([])
   const [produtos, setProdutos] = useState([])
+
   const [busca, setBusca] = useState('')
   const [carregando, setCarregando] = useState(true)
   const [compraEditando, setCompraEditando] = useState(null)
@@ -50,6 +62,21 @@ export default function Compras() {
         .order('nome')
     ])
 
+    if (comprasRes.error) {
+      console.error(comprasRes.error)
+      alert('Erro ao carregar compras.')
+    }
+
+    if (fornecedoresRes.error) {
+      console.error(fornecedoresRes.error)
+      alert('Erro ao carregar fornecedores.')
+    }
+
+    if (produtosRes.error) {
+      console.error(produtosRes.error)
+      alert('Erro ao carregar produtos.')
+    }
+
     setCompras(comprasRes.data || [])
     setFornecedores(fornecedoresRes.data || [])
     setProdutos(produtosRes.data || [])
@@ -77,6 +104,7 @@ export default function Compras() {
 
   function formatarData(data) {
     if (!data) return '—'
+
     return new Date(data).toLocaleDateString('pt-BR')
   }
 
@@ -94,8 +122,45 @@ export default function Compras() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  async function registrarMovimentacaoEstoque({
+    produtoId,
+    tipo,
+    quantidade,
+    estoqueAnterior,
+    estoqueAtual,
+    referencia,
+    observacao
+  }) {
+    const { error } = await supabase
+      .from('movimentacoes_estoque')
+      .insert([
+        {
+          produto_id: produtoId,
+          tipo,
+          quantidade,
+          estoque_anterior: estoqueAnterior,
+          estoque_atual: estoqueAtual,
+          referencia,
+          observacao
+        }
+      ])
+
+    if (error) {
+      console.error(error)
+      alert(
+        'A operação foi concluída, mas houve erro ao registrar a movimentação de estoque: ' +
+          error.message
+      )
+    }
+  }
+
   async function salvarCompra() {
-    if (!form.fornecedor_id || !form.produto_id || !form.quantidade || !form.custo_unitario) {
+    if (
+      !form.fornecedor_id ||
+      !form.produto_id ||
+      !form.quantidade ||
+      !form.custo_unitario
+    ) {
       alert('Fornecedor, produto, quantidade e custo são obrigatórios.')
       return
     }
@@ -111,13 +176,15 @@ export default function Compras() {
 
     setSalvando(true)
 
-    if (compraEditando) {
-      await editarCompra(quantidade, custoUnitario, total)
-    } else {
-      await registrarCompra(quantidade, custoUnitario, total)
+    try {
+      if (compraEditando) {
+        await editarCompra(quantidade, custoUnitario, total)
+      } else {
+        await registrarCompra(quantidade, custoUnitario, total)
+      }
+    } finally {
+      setSalvando(false)
     }
-
-    setSalvando(false)
   }
 
   async function registrarCompra(quantidade, custoUnitario, total) {
@@ -127,6 +194,9 @@ export default function Compras() {
       alert('Produto inválido.')
       return
     }
+
+    const estoqueAnterior = Number(produto.estoque_atual || 0)
+    const novoEstoque = estoqueAnterior + quantidade
 
     const { data: compraCriada, error: erroCompra } = await supabase
       .from('compras')
@@ -148,8 +218,6 @@ export default function Compras() {
       return
     }
 
-    const novoEstoque = Number(produto.estoque_atual || 0) + quantidade
-
     const { error: erroProduto } = await supabase
       .from('produtos')
       .update({
@@ -163,6 +231,18 @@ export default function Compras() {
       alert('Compra registrada, mas erro ao atualizar produto: ' + erroProduto.message)
       return
     }
+
+    await registrarMovimentacaoEstoque({
+      produtoId: produto.id,
+      tipo: 'entrada',
+      quantidade,
+      estoqueAnterior,
+      estoqueAtual: novoEstoque,
+      referencia: `compra:${compraCriada.id}`,
+      observacao:
+        form.observacao ||
+        `Entrada de estoque por compra - ${produto.nome}`
+    })
 
     const { error: erroFinanceiro } = await supabase
       .from('financeiro')
@@ -192,8 +272,8 @@ export default function Compras() {
 
     await registrarAuditoria({
       tipo: 'entrada',
-      modulo: 'produtos',
-      descricao: `Entrada de estoque por compra: ${produto.nome} (${quantidade})`,
+      modulo: 'estoque',
+      descricao: `Entrada de estoque por compra: ${produto.nome}. Estoque ${estoqueAnterior} → ${novoEstoque}`,
       valor: total,
       referencia_id: produto.id
     })
@@ -209,7 +289,7 @@ export default function Compras() {
     alert('Compra registrada com sucesso!')
 
     limparForm()
-    carregarDados()
+    await carregarDados()
   }
 
   async function editarCompra(quantidadeNova, custoNovo, totalNovo) {
@@ -224,8 +304,8 @@ export default function Compras() {
     const quantidadeAntiga = Number(compraEditando.quantidade || 0)
 
     if (produtoAntigo.id === produtoNovo.id) {
-      const estoqueAtual = Number(produtoNovo.estoque_atual || 0)
-      const estoqueRecalculado = estoqueAtual - quantidadeAntiga + quantidadeNova
+      const estoqueAnterior = Number(produtoNovo.estoque_atual || 0)
+      const estoqueRecalculado = estoqueAnterior - quantidadeAntiga + quantidadeNova
 
       if (estoqueRecalculado < 0) {
         alert('Não é possível editar: o estoque ficaria negativo.')
@@ -245,15 +325,27 @@ export default function Compras() {
         alert('Erro ao atualizar estoque: ' + erroProduto.message)
         return
       }
+
+      await registrarMovimentacaoEstoque({
+        produtoId: produtoNovo.id,
+        tipo: 'ajuste',
+        quantidade: Math.abs(estoqueRecalculado - estoqueAnterior),
+        estoqueAnterior,
+        estoqueAtual: estoqueRecalculado,
+        referencia: `edicao_compra:${compraEditando.id}`,
+        observacao: `Ajuste por edição de compra - ${produtoNovo.nome}`
+      })
     } else {
-      const estoqueProdutoAntigo = Number(produtoAntigo.estoque_atual || 0) - quantidadeAntiga
+      const estoqueAnteriorAntigo = Number(produtoAntigo.estoque_atual || 0)
+      const estoqueProdutoAntigo = estoqueAnteriorAntigo - quantidadeAntiga
 
       if (estoqueProdutoAntigo < 0) {
         alert('Não é possível editar: o estoque do produto antigo ficaria negativo.')
         return
       }
 
-      const estoqueProdutoNovo = Number(produtoNovo.estoque_atual || 0) + quantidadeNova
+      const estoqueAnteriorNovo = Number(produtoNovo.estoque_atual || 0)
+      const estoqueProdutoNovo = estoqueAnteriorNovo + quantidadeNova
 
       const { error: erroProdutoAntigo } = await supabase
         .from('produtos')
@@ -266,6 +358,16 @@ export default function Compras() {
         alert('Erro ao reverter produto antigo: ' + erroProdutoAntigo.message)
         return
       }
+
+      await registrarMovimentacaoEstoque({
+        produtoId: produtoAntigo.id,
+        tipo: 'saida',
+        quantidade: quantidadeAntiga,
+        estoqueAnterior: estoqueAnteriorAntigo,
+        estoqueAtual: estoqueProdutoAntigo,
+        referencia: `edicao_compra:${compraEditando.id}`,
+        observacao: `Reversão por troca de produto na compra`
+      })
 
       const { error: erroProdutoNovo } = await supabase
         .from('produtos')
@@ -280,6 +382,16 @@ export default function Compras() {
         alert('Erro ao atualizar produto novo: ' + erroProdutoNovo.message)
         return
       }
+
+      await registrarMovimentacaoEstoque({
+        produtoId: produtoNovo.id,
+        tipo: 'entrada',
+        quantidade: quantidadeNova,
+        estoqueAnterior: estoqueAnteriorNovo,
+        estoqueAtual: estoqueProdutoNovo,
+        referencia: `edicao_compra:${compraEditando.id}`,
+        observacao: `Entrada por troca de produto na compra`
+      })
     }
 
     const { error: erroCompra } = await supabase
@@ -299,10 +411,7 @@ export default function Compras() {
       return
     }
 
-    await supabase
-      .from('financeiro')
-      .delete()
-      .eq('compra_id', compraEditando.id)
+    await supabase.from('financeiro').delete().eq('compra_id', compraEditando.id)
 
     const { error: erroFinanceiro } = await supabase
       .from('financeiro')
@@ -331,6 +440,14 @@ export default function Compras() {
     })
 
     await registrarAuditoria({
+      tipo: 'ajuste',
+      modulo: 'estoque',
+      descricao: `Estoque ajustado por edição de compra: ${produtoNovo.nome}`,
+      valor: totalNovo,
+      referencia_id: compraEditando.id
+    })
+
+    await registrarAuditoria({
       tipo: 'saída',
       modulo: 'financeiro',
       descricao: `Saída financeira atualizada por edição de compra: ${produtoNovo.nome}`,
@@ -341,7 +458,7 @@ export default function Compras() {
     alert('Compra editada com sucesso!')
 
     limparForm()
-    carregarDados()
+    await carregarDados()
   }
 
   async function excluirCompra(compra) {
@@ -358,7 +475,8 @@ export default function Compras() {
       return
     }
 
-    const novoEstoque = Number(produto.estoque_atual || 0) - Number(compra.quantidade || 0)
+    const estoqueAnterior = Number(produto.estoque_atual || 0)
+    const novoEstoque = estoqueAnterior - Number(compra.quantidade || 0)
 
     if (novoEstoque < 0) {
       alert('Não é possível excluir: o estoque ficaria negativo. Faça um ajuste manual de estoque antes.')
@@ -377,10 +495,17 @@ export default function Compras() {
       return
     }
 
-    await supabase
-      .from('financeiro')
-      .delete()
-      .eq('compra_id', compra.id)
+    await registrarMovimentacaoEstoque({
+      produtoId: produto.id,
+      tipo: 'saida',
+      quantidade: Number(compra.quantidade || 0),
+      estoqueAnterior,
+      estoqueAtual: novoEstoque,
+      referencia: `exclusao_compra:${compra.id}`,
+      observacao: `Saída por exclusão de compra - ${produto.nome}`
+    })
+
+    await supabase.from('financeiro').delete().eq('compra_id', compra.id)
 
     const { error: erroCompra } = await supabase
       .from('compras')
@@ -402,7 +527,7 @@ export default function Compras() {
 
     await registrarAuditoria({
       tipo: 'saída',
-      modulo: 'produtos',
+      modulo: 'estoque',
       descricao: `Estoque revertido por exclusão de compra: ${compra.produtos?.nome || 'produto'} (${compra.quantidade})`,
       valor: compra.total,
       referencia_id: compra.produto_id
@@ -410,7 +535,7 @@ export default function Compras() {
 
     alert('Compra excluída e estoque revertido.')
 
-    carregarDados()
+    await carregarDados()
   }
 
   const comprasFiltradas = compras.filter((c) => {
@@ -427,71 +552,69 @@ export default function Compras() {
 
   return (
     <div className="p-6">
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
+            <PackagePlus size={22} />
+            Compras / Entrada de Estoque
+          </h1>
 
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-800">
-          Compras / Entrada de Estoque
-        </h1>
+          <p className="text-sm text-gray-500">
+            Registre, edite e reverta compras de fornecedores
+          </p>
+        </div>
 
-        <p className="text-sm text-gray-500">
-          Registre, edite e reverta compras de fornecedores
-        </p>
+        <button
+          onClick={carregarDados}
+          className="flex items-center gap-2 border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-sm"
+        >
+          <RefreshCcw size={16} />
+          Atualizar
+        </button>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-6">
-
-        <div className="bg-white rounded-xl p-4 border border-gray-200">
-          <div className="text-xs text-gray-500 mb-1">
-            Total em compras
-          </div>
-
-          <div className="text-2xl font-semibold text-red-600">
+        <div className="bg-white border border-gray-200 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">Total em compras</p>
+          <h2 className="text-2xl font-bold text-gray-800 mt-1">
             {formatarMoeda(totalCompras)}
-          </div>
+          </h2>
         </div>
 
-        <div className="bg-white rounded-xl p-4 border border-gray-200">
-          <div className="text-xs text-gray-500 mb-1">
-            Compras registradas
-          </div>
-
-          <div className="text-2xl font-semibold text-gray-800">
+        <div className="bg-white border border-gray-200 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">Compras registradas</p>
+          <h2 className="text-2xl font-bold text-gray-800 mt-1">
             {compras.length}
-          </div>
+          </h2>
         </div>
 
-        <div className="bg-white rounded-xl p-4 border border-gray-200">
-          <div className="text-xs text-gray-500 mb-1">
-            Fornecedores ativos
-          </div>
-
-          <div className="text-2xl font-semibold text-gray-800">
+        <div className="bg-white border border-gray-200 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">Fornecedores ativos</p>
+          <h2 className="text-2xl font-bold text-gray-800 mt-1">
             {fornecedores.length}
-          </div>
+          </h2>
         </div>
-
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
-
+      <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-            <PackagePlus size={18} />
+            <Plus size={18} />
             {compraEditando ? 'Editar entrada de estoque' : 'Nova entrada de estoque'}
           </h2>
 
           {compraEditando && (
             <button
               onClick={limparForm}
-              className="text-xs text-gray-500 hover:text-gray-700"
+              className="flex items-center gap-1 text-red-600 hover:text-red-800 text-sm"
             >
+              <XCircle size={15} />
               Cancelar edição
             </button>
           )}
         </div>
 
-        <div className="grid grid-cols-5 gap-3">
-
+        <div className="grid grid-cols-4 gap-3">
           <div>
             <label className="text-xs text-gray-500 mb-1 block">
               Fornecedor *
@@ -499,7 +622,12 @@ export default function Compras() {
 
             <select
               value={form.fornecedor_id}
-              onChange={(e) => setForm({ ...form, fornecedor_id: e.target.value })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  fornecedor_id: e.target.value
+                })
+              }
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
             >
               <option value="">Selecione</option>
@@ -519,7 +647,12 @@ export default function Compras() {
 
             <select
               value={form.produto_id}
-              onChange={(e) => setForm({ ...form, produto_id: e.target.value })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  produto_id: e.target.value
+                })
+              }
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
             >
               <option value="">Selecione</option>
@@ -539,8 +672,14 @@ export default function Compras() {
 
             <input
               type="number"
+              min="1"
               value={form.quantidade}
-              onChange={(e) => setForm({ ...form, quantidade: e.target.value })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  quantidade: e.target.value
+                })
+              }
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
               placeholder="0"
             />
@@ -553,11 +692,37 @@ export default function Compras() {
 
             <input
               type="number"
+              min="0"
               step="0.01"
               value={form.custo_unitario}
-              onChange={(e) => setForm({ ...form, custo_unitario: e.target.value })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  custo_unitario: e.target.value
+                })
+              }
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
               placeholder="0,00"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-3 mt-3">
+          <div className="col-span-3">
+            <label className="text-xs text-gray-500 mb-1 block">
+              Observação
+            </label>
+
+            <input
+              value={form.observacao}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  observacao: e.target.value
+                })
+              }
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+              placeholder="Nota, prazo, condição de compra..."
             />
           </div>
 
@@ -565,9 +730,8 @@ export default function Compras() {
             <button
               onClick={salvarCompra}
               disabled={salvando}
-              className="w-full flex items-center justify-center gap-2 bg-green-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-60"
+              className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white rounded-lg py-2 text-sm"
             >
-              <Plus size={16} />
               {salvando
                 ? 'Salvando...'
                 : compraEditando
@@ -575,48 +739,57 @@ export default function Compras() {
                   : 'Registrar'}
             </button>
           </div>
-
-          <div className="col-span-5">
-            <label className="text-xs text-gray-500 mb-1 block">
-              Observação
-            </label>
-
-            <input
-              value={form.observacao}
-              onChange={(e) => setForm({ ...form, observacao: e.target.value })}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
-              placeholder="Nota, prazo, condição de compra..."
-            />
-          </div>
-
         </div>
       </div>
 
-      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 mb-4 w-full max-w-md">
-        <Search size={16} className="text-gray-400" />
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-6">
+        <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-2">
+          <Search size={16} className="text-gray-400" />
 
-        <input
-          type="text"
-          placeholder="Buscar por fornecedor, produto ou observação..."
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-          className="flex-1 text-sm outline-none text-gray-700"
-        />
+          <input
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Buscar por fornecedor, produto ou observação..."
+            className="flex-1 text-sm outline-none text-gray-700"
+          />
+        </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
         <table className="w-full text-sm">
-
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Data</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Fornecedor</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Produto</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Qtd</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Custo Unit.</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Total</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Observação</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Ações</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Data
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Fornecedor
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Produto
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Qtd
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Custo Unit.
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Total
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Observação
+              </th>
+
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">
+                Ações
+              </th>
             </tr>
           </thead>
 
@@ -635,29 +808,51 @@ export default function Compras() {
               </tr>
             ) : (
               comprasFiltradas.map((c) => (
-                <tr key={c.id} className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="px-4 py-3 text-gray-500">{formatarData(c.criado_em)}</td>
-                  <td className="px-4 py-3 font-medium text-gray-800">{c.fornecedores?.nome || '—'}</td>
-                  <td className="px-4 py-3 text-gray-600">{c.produtos?.nome || '—'}</td>
-                  <td className="px-4 py-3">{c.quantidade} {c.produtos?.unidade || ''}</td>
-                  <td className="px-4 py-3">{formatarMoeda(c.custo_unitario)}</td>
-                  <td className="px-4 py-3 font-medium text-red-600">{formatarMoeda(c.total)}</td>
-                  <td className="px-4 py-3 text-gray-500">{c.observacao || '—'}</td>
+                <tr key={c.id} className="border-b border-gray-100">
+                  <td className="px-4 py-3 text-gray-600">
+                    {formatarData(c.criado_em)}
+                  </td>
 
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
+                    {c.fornecedores?.nome || '—'}
+                  </td>
+
+                  <td className="px-4 py-3 font-medium text-gray-800">
+                    {c.produtos?.nome || '—'}
+                  </td>
+
+                  <td className="px-4 py-3">
+                    {c.quantidade} {c.produtos?.unidade || ''}
+                  </td>
+
+                  <td className="px-4 py-3">
+                    {formatarMoeda(c.custo_unitario)}
+                  </td>
+
+                  <td className="px-4 py-3 font-semibold text-red-600">
+                    {formatarMoeda(c.total)}
+                  </td>
+
+                  <td className="px-4 py-3 text-gray-600">
+                    {c.observacao || '—'}
+                  </td>
+
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
                       <button
                         onClick={() => abrirEditarCompra(c)}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                        className="text-blue-600 hover:text-blue-800"
+                        title="Editar"
                       >
-                        Editar
+                        <Edit size={16} />
                       </button>
 
                       <button
                         onClick={() => excluirCompra(c)}
                         className="text-red-600 hover:text-red-800"
+                        title="Excluir"
                       >
-                        <Trash2 size={15} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>
@@ -665,10 +860,8 @@ export default function Compras() {
               ))
             )}
           </tbody>
-
         </table>
       </div>
-
     </div>
   )
 }
