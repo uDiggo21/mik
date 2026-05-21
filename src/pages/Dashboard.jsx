@@ -32,6 +32,8 @@ import {
   Cell
 } from 'recharts'
 
+const CORES_GRAFICO = ['#16a34a', '#ef4444', '#f97316', '#3b82f6']
+
 export default function Dashboard() {
   const [dados, setDados] = useState({
     produtos: [],
@@ -92,14 +94,6 @@ export default function Dashboard() {
         .order('criado_em', { ascending: false })
     ])
 
-    if (produtosRes.error) console.error(produtosRes.error)
-    if (clientesRes.error) console.error(clientesRes.error)
-    if (fornecedoresRes.error) console.error(fornecedoresRes.error)
-    if (vendasRes.error) console.error(vendasRes.error)
-    if (financeiroRes.error) console.error(financeiroRes.error)
-    if (fiadoRes.error) console.error(fiadoRes.error)
-    if (comprasRes.error) console.error(comprasRes.error)
-
     setDados({
       produtos: produtosRes.data || [],
       clientes: clientesRes.data || [],
@@ -122,7 +116,6 @@ export default function Dashboard() {
 
   function formatarData(data) {
     if (!data) return '—'
-
     return new Date(data).toLocaleDateString('pt-BR')
   }
 
@@ -135,19 +128,9 @@ export default function Dashboard() {
     })
   }
 
-  function dataCompleta(data) {
-    if (!data) return 'Sem data'
-
-    return new Date(data).toLocaleDateString('pt-BR')
-  }
-
   const metricas = useMemo(() => {
     const vendasValidas = dados.vendas.filter(
       (venda) => venda.status !== 'cancelada'
-    )
-
-    const vendasCanceladas = dados.vendas.filter(
-      (venda) => venda.status === 'cancelada'
     )
 
     const faturamentoTotal = vendasValidas.reduce(
@@ -183,10 +166,6 @@ export default function Dashboard() {
       return estoqueMinimo > 0 && estoqueAtual <= estoqueMinimo
     })
 
-    const produtosSemEstoque = dados.produtos.filter((produto) => {
-      return Number(produto.estoque_atual || 0) <= 0
-    })
-
     const custoEstoque = dados.produtos.reduce((acc, produto) => {
       return (
         acc +
@@ -194,29 +173,16 @@ export default function Dashboard() {
       )
     }, 0)
 
-    const valorVendaEstoque = dados.produtos.reduce((acc, produto) => {
-      return (
-        acc +
-        Number(produto.estoque_atual || 0) * Number(produto.preco_venda || 0)
-      )
-    }, 0)
-
-    const lucroBrutoEstimado = faturamentoTotal - totalCompras
-
     return {
       vendasValidas,
-      vendasCanceladas,
       faturamentoTotal,
       entradas,
       saidas,
       saldo,
       fiadoAberto,
       estoqueCritico,
-      produtosSemEstoque,
       totalCompras,
-      custoEstoque,
-      valorVendaEstoque,
-      lucroBrutoEstimado
+      custoEstoque
     }
   }, [dados])
 
@@ -244,6 +210,7 @@ export default function Dashboard() {
 
     dados.financeiro.forEach((mov) => {
       const data = chaveDia(mov.data || mov.criado_em)
+
       const atual = mapa.get(data) || {
         data,
         entradas: 0,
@@ -415,11 +382,23 @@ export default function Dashboard() {
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={graficoVendas}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="data" />
-                  <YAxis />
-                  <Tooltip formatter={(value) => formatarMoeda(value)} />
-                  <Bar dataKey="total" radius={[8, 8, 0, 0]} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="data" tick={{ fill: '#9ca3af' }} />
+                  <YAxis tick={{ fill: '#9ca3af' }} />
+                  <Tooltip
+                    formatter={(value) => formatarMoeda(value)}
+                    contentStyle={{
+                      backgroundColor: '#111827',
+                      border: '1px solid #374151',
+                      borderRadius: '12px',
+                      color: '#fff'
+                    }}
+                  />
+                  <Bar
+                    dataKey="total"
+                    fill="#16a34a"
+                    radius={[8, 8, 0, 0]}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -454,13 +433,24 @@ export default function Dashboard() {
                     dataKey="value"
                     nameKey="name"
                     outerRadius={90}
-                    label
+                    label={({ name }) => name}
                   >
                     {graficoResumoFinanceiro.map((_, index) => (
-                      <Cell key={index} />
+                      <Cell
+                        key={index}
+                        fill={CORES_GRAFICO[index % CORES_GRAFICO.length]}
+                      />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value) => formatarMoeda(value)} />
+                  <Tooltip
+                    formatter={(value) => formatarMoeda(value)}
+                    contentStyle={{
+                      backgroundColor: '#111827',
+                      border: '1px solid #374151',
+                      borderRadius: '12px',
+                      color: '#fff'
+                    }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -494,19 +484,31 @@ export default function Dashboard() {
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={graficoFinanceiro}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="data" />
-                  <YAxis />
-                  <Tooltip formatter={(value) => formatarMoeda(value)} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="data" tick={{ fill: '#9ca3af' }} />
+                  <YAxis tick={{ fill: '#9ca3af' }} />
+                  <Tooltip
+                    formatter={(value) => formatarMoeda(value)}
+                    contentStyle={{
+                      backgroundColor: '#111827',
+                      border: '1px solid #374151',
+                      borderRadius: '12px',
+                      color: '#fff'
+                    }}
+                  />
                   <Line
                     type="monotone"
                     dataKey="entradas"
+                    stroke="#16a34a"
                     strokeWidth={3}
+                    dot={{ r: 4 }}
                   />
                   <Line
                     type="monotone"
                     dataKey="saidas"
+                    stroke="#ef4444"
                     strokeWidth={3}
+                    dot={{ r: 4 }}
                   />
                 </LineChart>
               </ResponsiveContainer>
