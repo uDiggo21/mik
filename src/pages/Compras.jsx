@@ -1,0 +1,674 @@
+import { useEffect, useState } from 'react'
+import { supabase } from '../services/supabase'
+import { Plus, Search, PackagePlus, Trash2 } from 'lucide-react'
+import { registrarAuditoria } from '../utils/auditoria'
+
+export default function Compras() {
+  const [compras, setCompras] = useState([])
+  const [fornecedores, setFornecedores] = useState([])
+  const [produtos, setProdutos] = useState([])
+  const [busca, setBusca] = useState('')
+  const [carregando, setCarregando] = useState(true)
+  const [compraEditando, setCompraEditando] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+
+  const [form, setForm] = useState({
+    fornecedor_id: '',
+    produto_id: '',
+    quantidade: '',
+    custo_unitario: '',
+    observacao: ''
+  })
+
+  useEffect(() => {
+    carregarDados()
+  }, [])
+
+  async function carregarDados() {
+    setCarregando(true)
+
+    const [comprasRes, fornecedoresRes, produtosRes] = await Promise.all([
+      supabase
+        .from('compras')
+        .select(`
+          *,
+          fornecedores (nome),
+          produtos (nome, unidade)
+        `)
+        .order('criado_em', { ascending: false }),
+
+      supabase
+        .from('fornecedores')
+        .select('*')
+        .eq('ativo', true)
+        .order('nome'),
+
+      supabase
+        .from('produtos')
+        .select('*')
+        .eq('ativo', true)
+        .order('nome')
+    ])
+
+    setCompras(comprasRes.data || [])
+    setFornecedores(fornecedoresRes.data || [])
+    setProdutos(produtosRes.data || [])
+    setCarregando(false)
+  }
+
+  function limparForm() {
+    setForm({
+      fornecedor_id: '',
+      produto_id: '',
+      quantidade: '',
+      custo_unitario: '',
+      observacao: ''
+    })
+
+    setCompraEditando(null)
+  }
+
+  function formatarMoeda(valor) {
+    return Number(valor || 0).toLocaleString('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    })
+  }
+
+  function formatarData(data) {
+    if (!data) return '—'
+    return new Date(data).toLocaleDateString('pt-BR')
+  }
+
+  function abrirEditarCompra(compra) {
+    setCompraEditando(compra)
+
+    setForm({
+      fornecedor_id: compra.fornecedor_id || '',
+      produto_id: compra.produto_id || '',
+      quantidade: compra.quantidade || '',
+      custo_unitario: compra.custo_unitario || '',
+      observacao: compra.observacao || ''
+    })
+
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  async function salvarCompra() {
+    if (!form.fornecedor_id || !form.produto_id || !form.quantidade || !form.custo_unitario) {
+      alert('Fornecedor, produto, quantidade e custo são obrigatórios.')
+      return
+    }
+
+    const quantidade = Number(form.quantidade || 0)
+    const custoUnitario = Number(form.custo_unitario || 0)
+    const total = quantidade * custoUnitario
+
+    if (quantidade <= 0 || custoUnitario <= 0) {
+      alert('Quantidade e custo precisam ser maiores que zero.')
+      return
+    }
+
+    setSalvando(true)
+
+    if (compraEditando) {
+      await editarCompra(quantidade, custoUnitario, total)
+    } else {
+      await registrarCompra(quantidade, custoUnitario, total)
+    }
+
+    setSalvando(false)
+  }
+
+  async function registrarCompra(quantidade, custoUnitario, total) {
+    const produto = produtos.find((p) => p.id === form.produto_id)
+
+    if (!produto) {
+      alert('Produto inválido.')
+      return
+    }
+
+    const { data: compraCriada, error: erroCompra } = await supabase
+      .from('compras')
+      .insert([
+        {
+          fornecedor_id: form.fornecedor_id,
+          produto_id: form.produto_id,
+          quantidade,
+          custo_unitario: custoUnitario,
+          total,
+          observacao: form.observacao
+        }
+      ])
+      .select()
+      .single()
+
+    if (erroCompra) {
+      alert('Erro ao registrar compra: ' + erroCompra.message)
+      return
+    }
+
+    const novoEstoque = Number(produto.estoque_atual || 0) + quantidade
+
+    const { error: erroProduto } = await supabase
+      .from('produtos')
+      .update({
+        estoque_atual: novoEstoque,
+        preco_custo: custoUnitario,
+        fornecedor_id: form.fornecedor_id
+      })
+      .eq('id', produto.id)
+
+    if (erroProduto) {
+      alert('Compra registrada, mas erro ao atualizar produto: ' + erroProduto.message)
+      return
+    }
+
+    const { error: erroFinanceiro } = await supabase
+      .from('financeiro')
+      .insert([
+        {
+          tipo: 'saida',
+          descricao: `Compra de estoque - ${produto.nome}`,
+          valor: total,
+          categoria: 'compra_estoque',
+          compra_id: compraCriada.id,
+          origem: 'compra'
+        }
+      ])
+
+    if (erroFinanceiro) {
+      alert('Compra registrada, mas erro ao lançar financeiro: ' + erroFinanceiro.message)
+      return
+    }
+
+    await registrarAuditoria({
+      tipo: 'criação',
+      modulo: 'compras',
+      descricao: `Compra registrada: ${produto.nome} (${quantidade})`,
+      valor: total,
+      referencia_id: compraCriada.id
+    })
+
+    await registrarAuditoria({
+      tipo: 'entrada',
+      modulo: 'produtos',
+      descricao: `Entrada de estoque por compra: ${produto.nome} (${quantidade})`,
+      valor: total,
+      referencia_id: produto.id
+    })
+
+    await registrarAuditoria({
+      tipo: 'saída',
+      modulo: 'financeiro',
+      descricao: `Saída financeira por compra de estoque: ${produto.nome}`,
+      valor: total,
+      referencia_id: compraCriada.id
+    })
+
+    alert('Compra registrada com sucesso!')
+
+    limparForm()
+    carregarDados()
+  }
+
+  async function editarCompra(quantidadeNova, custoNovo, totalNovo) {
+    const produtoNovo = produtos.find((p) => p.id === form.produto_id)
+    const produtoAntigo = produtos.find((p) => p.id === compraEditando.produto_id)
+
+    if (!produtoNovo || !produtoAntigo) {
+      alert('Produto inválido.')
+      return
+    }
+
+    const quantidadeAntiga = Number(compraEditando.quantidade || 0)
+
+    if (produtoAntigo.id === produtoNovo.id) {
+      const estoqueAtual = Number(produtoNovo.estoque_atual || 0)
+      const estoqueRecalculado = estoqueAtual - quantidadeAntiga + quantidadeNova
+
+      if (estoqueRecalculado < 0) {
+        alert('Não é possível editar: o estoque ficaria negativo.')
+        return
+      }
+
+      const { error: erroProduto } = await supabase
+        .from('produtos')
+        .update({
+          estoque_atual: estoqueRecalculado,
+          preco_custo: custoNovo,
+          fornecedor_id: form.fornecedor_id
+        })
+        .eq('id', produtoNovo.id)
+
+      if (erroProduto) {
+        alert('Erro ao atualizar estoque: ' + erroProduto.message)
+        return
+      }
+    } else {
+      const estoqueProdutoAntigo = Number(produtoAntigo.estoque_atual || 0) - quantidadeAntiga
+
+      if (estoqueProdutoAntigo < 0) {
+        alert('Não é possível editar: o estoque do produto antigo ficaria negativo.')
+        return
+      }
+
+      const estoqueProdutoNovo = Number(produtoNovo.estoque_atual || 0) + quantidadeNova
+
+      const { error: erroProdutoAntigo } = await supabase
+        .from('produtos')
+        .update({
+          estoque_atual: estoqueProdutoAntigo
+        })
+        .eq('id', produtoAntigo.id)
+
+      if (erroProdutoAntigo) {
+        alert('Erro ao reverter produto antigo: ' + erroProdutoAntigo.message)
+        return
+      }
+
+      const { error: erroProdutoNovo } = await supabase
+        .from('produtos')
+        .update({
+          estoque_atual: estoqueProdutoNovo,
+          preco_custo: custoNovo,
+          fornecedor_id: form.fornecedor_id
+        })
+        .eq('id', produtoNovo.id)
+
+      if (erroProdutoNovo) {
+        alert('Erro ao atualizar produto novo: ' + erroProdutoNovo.message)
+        return
+      }
+    }
+
+    const { error: erroCompra } = await supabase
+      .from('compras')
+      .update({
+        fornecedor_id: form.fornecedor_id,
+        produto_id: form.produto_id,
+        quantidade: quantidadeNova,
+        custo_unitario: custoNovo,
+        total: totalNovo,
+        observacao: form.observacao
+      })
+      .eq('id', compraEditando.id)
+
+    if (erroCompra) {
+      alert('Erro ao editar compra: ' + erroCompra.message)
+      return
+    }
+
+    await supabase
+      .from('financeiro')
+      .delete()
+      .eq('compra_id', compraEditando.id)
+
+    const { error: erroFinanceiro } = await supabase
+      .from('financeiro')
+      .insert([
+        {
+          tipo: 'saida',
+          descricao: `Compra de estoque - ${produtoNovo.nome}`,
+          valor: totalNovo,
+          categoria: 'compra_estoque',
+          compra_id: compraEditando.id,
+          origem: 'compra'
+        }
+      ])
+
+    if (erroFinanceiro) {
+      alert('Compra editada, mas erro ao atualizar financeiro: ' + erroFinanceiro.message)
+      return
+    }
+
+    await registrarAuditoria({
+      tipo: 'edição',
+      modulo: 'compras',
+      descricao: `Compra editada: ${produtoNovo.nome} (${quantidadeNova})`,
+      valor: totalNovo,
+      referencia_id: compraEditando.id
+    })
+
+    await registrarAuditoria({
+      tipo: 'saída',
+      modulo: 'financeiro',
+      descricao: `Saída financeira atualizada por edição de compra: ${produtoNovo.nome}`,
+      valor: totalNovo,
+      referencia_id: compraEditando.id
+    })
+
+    alert('Compra editada com sucesso!')
+
+    limparForm()
+    carregarDados()
+  }
+
+  async function excluirCompra(compra) {
+    const confirmar = confirm(
+      `Deseja excluir esta compra de ${compra.produtos?.nome || 'produto'}? O estoque e o financeiro serão revertidos.`
+    )
+
+    if (!confirmar) return
+
+    const produto = produtos.find((p) => p.id === compra.produto_id)
+
+    if (!produto) {
+      alert('Produto não encontrado para reverter estoque.')
+      return
+    }
+
+    const novoEstoque = Number(produto.estoque_atual || 0) - Number(compra.quantidade || 0)
+
+    if (novoEstoque < 0) {
+      alert('Não é possível excluir: o estoque ficaria negativo. Faça um ajuste manual de estoque antes.')
+      return
+    }
+
+    const { error: erroProduto } = await supabase
+      .from('produtos')
+      .update({
+        estoque_atual: novoEstoque
+      })
+      .eq('id', produto.id)
+
+    if (erroProduto) {
+      alert('Erro ao reverter estoque: ' + erroProduto.message)
+      return
+    }
+
+    await supabase
+      .from('financeiro')
+      .delete()
+      .eq('compra_id', compra.id)
+
+    const { error: erroCompra } = await supabase
+      .from('compras')
+      .delete()
+      .eq('id', compra.id)
+
+    if (erroCompra) {
+      alert('Erro ao excluir compra: ' + erroCompra.message)
+      return
+    }
+
+    await registrarAuditoria({
+      tipo: 'cancelamento',
+      modulo: 'compras',
+      descricao: `Compra excluída e estoque revertido: ${compra.produtos?.nome || 'produto'}`,
+      valor: compra.total,
+      referencia_id: compra.id
+    })
+
+    await registrarAuditoria({
+      tipo: 'saída',
+      modulo: 'produtos',
+      descricao: `Estoque revertido por exclusão de compra: ${compra.produtos?.nome || 'produto'} (${compra.quantidade})`,
+      valor: compra.total,
+      referencia_id: compra.produto_id
+    })
+
+    alert('Compra excluída e estoque revertido.')
+
+    carregarDados()
+  }
+
+  const comprasFiltradas = compras.filter((c) => {
+    const textoBusca = String(busca || '').toLowerCase()
+
+    return (
+      String(c.fornecedores?.nome || '').toLowerCase().includes(textoBusca) ||
+      String(c.produtos?.nome || '').toLowerCase().includes(textoBusca) ||
+      String(c.observacao || '').toLowerCase().includes(textoBusca)
+    )
+  })
+
+  const totalCompras = compras.reduce((acc, c) => acc + Number(c.total || 0), 0)
+
+  return (
+    <div className="p-6">
+
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-gray-800">
+          Compras / Entrada de Estoque
+        </h1>
+
+        <p className="text-sm text-gray-500">
+          Registre, edite e reverta compras de fornecedores
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mb-6">
+
+        <div className="bg-white rounded-xl p-4 border border-gray-200">
+          <div className="text-xs text-gray-500 mb-1">
+            Total em compras
+          </div>
+
+          <div className="text-2xl font-semibold text-red-600">
+            {formatarMoeda(totalCompras)}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-4 border border-gray-200">
+          <div className="text-xs text-gray-500 mb-1">
+            Compras registradas
+          </div>
+
+          <div className="text-2xl font-semibold text-gray-800">
+            {compras.length}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-4 border border-gray-200">
+          <div className="text-xs text-gray-500 mb-1">
+            Fornecedores ativos
+          </div>
+
+          <div className="text-2xl font-semibold text-gray-800">
+            {fornecedores.length}
+          </div>
+        </div>
+
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+            <PackagePlus size={18} />
+            {compraEditando ? 'Editar entrada de estoque' : 'Nova entrada de estoque'}
+          </h2>
+
+          {compraEditando && (
+            <button
+              onClick={limparForm}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              Cancelar edição
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-5 gap-3">
+
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">
+              Fornecedor *
+            </label>
+
+            <select
+              value={form.fornecedor_id}
+              onChange={(e) => setForm({ ...form, fornecedor_id: e.target.value })}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+            >
+              <option value="">Selecione</option>
+
+              {fornecedores.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">
+              Produto *
+            </label>
+
+            <select
+              value={form.produto_id}
+              onChange={(e) => setForm({ ...form, produto_id: e.target.value })}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+            >
+              <option value="">Selecione</option>
+
+              {produtos.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nome} — estoque: {p.estoque_atual}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">
+              Quantidade *
+            </label>
+
+            <input
+              type="number"
+              value={form.quantidade}
+              onChange={(e) => setForm({ ...form, quantidade: e.target.value })}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+              placeholder="0"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">
+              Custo unitário *
+            </label>
+
+            <input
+              type="number"
+              step="0.01"
+              value={form.custo_unitario}
+              onChange={(e) => setForm({ ...form, custo_unitario: e.target.value })}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+              placeholder="0,00"
+            />
+          </div>
+
+          <div className="flex items-end">
+            <button
+              onClick={salvarCompra}
+              disabled={salvando}
+              className="w-full flex items-center justify-center gap-2 bg-green-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-60"
+            >
+              <Plus size={16} />
+              {salvando
+                ? 'Salvando...'
+                : compraEditando
+                  ? 'Salvar edição'
+                  : 'Registrar'}
+            </button>
+          </div>
+
+          <div className="col-span-5">
+            <label className="text-xs text-gray-500 mb-1 block">
+              Observação
+            </label>
+
+            <input
+              value={form.observacao}
+              onChange={(e) => setForm({ ...form, observacao: e.target.value })}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"
+              placeholder="Nota, prazo, condição de compra..."
+            />
+          </div>
+
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 mb-4 w-full max-w-md">
+        <Search size={16} className="text-gray-400" />
+
+        <input
+          type="text"
+          placeholder="Buscar por fornecedor, produto ou observação..."
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          className="flex-1 text-sm outline-none text-gray-700"
+        />
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <table className="w-full text-sm">
+
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Data</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Fornecedor</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Produto</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Qtd</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Custo Unit.</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Total</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Observação</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">Ações</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {carregando ? (
+              <tr>
+                <td colSpan={8} className="text-center py-8 text-gray-400">
+                  Carregando...
+                </td>
+              </tr>
+            ) : comprasFiltradas.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="text-center py-8 text-gray-400">
+                  Nenhuma compra registrada.
+                </td>
+              </tr>
+            ) : (
+              comprasFiltradas.map((c) => (
+                <tr key={c.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <td className="px-4 py-3 text-gray-500">{formatarData(c.criado_em)}</td>
+                  <td className="px-4 py-3 font-medium text-gray-800">{c.fornecedores?.nome || '—'}</td>
+                  <td className="px-4 py-3 text-gray-600">{c.produtos?.nome || '—'}</td>
+                  <td className="px-4 py-3">{c.quantidade} {c.produtos?.unidade || ''}</td>
+                  <td className="px-4 py-3">{formatarMoeda(c.custo_unitario)}</td>
+                  <td className="px-4 py-3 font-medium text-red-600">{formatarMoeda(c.total)}</td>
+                  <td className="px-4 py-3 text-gray-500">{c.observacao || '—'}</td>
+
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => abrirEditarCompra(c)}
+                        className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                      >
+                        Editar
+                      </button>
+
+                      <button
+                        onClick={() => excluirCompra(c)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+
+        </table>
+      </div>
+
+    </div>
+  )
+}
